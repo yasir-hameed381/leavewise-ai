@@ -1,0 +1,3 @@
+Employees are entitled to casual leave based on available balance.
+Leave cannot exceed remaining balance.
+Unpaid leave is allowed if balance is insufficient.
