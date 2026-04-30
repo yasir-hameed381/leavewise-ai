@@ -1,9 +1,15 @@
+from pathlib import Path
+
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+
+BASE_DIR = Path(__file__).resolve().parent
+POLICY_FILE = BASE_DIR / "data" / "policies.txt"
+
 def build_vectorstore():
-    with open("data/policies.txt", "r") as f:
+    with POLICY_FILE.open("r", encoding="utf-8") as f:
         text = f.read()
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
