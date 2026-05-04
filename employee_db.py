@@ -1,12 +1,17 @@
-import json
-from pathlib import Path
-
-
-BASE_DIR = Path(__file__).resolve().parent
-EMPLOYEE_FILE = BASE_DIR / "data" / "employees.json"
+from db import SessionLocal
+from models import Employee
 
 
 def get_employee(emp_id):
-    with EMPLOYEE_FILE.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get(emp_id, {})
+    db = SessionLocal()
+    try:
+        employee = db.query(Employee).filter(Employee.employee_id == emp_id).first()
+        if not employee:
+            return {}
+        return {
+            "name": employee.name,
+            "leave_balance": employee.leave_balance,
+            "used_leaves": employee.used_leaves,
+        }
+    finally:
+        db.close()

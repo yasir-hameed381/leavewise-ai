@@ -5,3 +5,8 @@ langchain
 langchain-mistralai
 langchain-community
 faiss-cpu
+sqlalchemy
+passlib
+python-jose
+pypdf
+python-multipart

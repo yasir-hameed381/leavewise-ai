@@ -17,3 +17,8 @@ build/
 *.egg-info/
 .ipynb_checkpoints/
 .DS_Store
+# Chroma/FAISS cache
+.cache/
+index.faiss
+# SQLite DB
+leavewise.db

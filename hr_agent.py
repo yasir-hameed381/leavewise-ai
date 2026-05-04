@@ -8,19 +8,30 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_community.vectorstores import FAISS
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.tools import tool
 from langchain_mistralai import ChatMistralAI, MistralAIEmbeddings
 
+from db import SessionLocal
 from employee_db import get_employee
+from policy_store import get_active_policy_text
 
 
 BASE_DIR = Path(__file__).resolve().parent
 POLICY_FILE = BASE_DIR / "data" / "policies.txt"
 VECTORSTORE_DIR = BASE_DIR / ".cache" / "policy_faiss"
+EMPTY_POLICY_TEXT = "No policy content available."
 load_dotenv()
 
 
 def _read_policy_text() -> str:
+    db = SessionLocal()
+    try:
+        active_policy_text = get_active_policy_text(db)
+    finally:
+        db.close()
+    if active_policy_text.strip():
+        return active_policy_text
     if not POLICY_FILE.exists():
         return "No policy document found."
     return POLICY_FILE.read_text(encoding="utf-8")
@@ -37,17 +48,31 @@ def _get_embeddings():
 def _build_or_load_vectorstore():
     embeddings = _get_embeddings()
     if VECTORSTORE_DIR.exists():
-        return FAISS.load_local(
-            str(VECTORSTORE_DIR),
-            embeddings,
-            allow_dangerous_deserialization=True,
-        )
+        try:
+            return FAISS.load_local(
+                str(VECTORSTORE_DIR),
+                embeddings,
+                allow_dangerous_deserialization=True,
+            )
+        except Exception:
+            for item in VECTORSTORE_DIR.glob("*"):
+                item.unlink(missing_ok=True)
+            VECTORSTORE_DIR.rmdir()
 
     policy_text = _read_policy_text()
-    lines = [line.strip() for line in policy_text.splitlines() if line.strip()]
-    if not lines:
-        lines = ["No policy content available."]
-    vectorstore = FAISS.from_texts(lines, embedding=embeddings)
+    if not policy_text.strip():
+        policy_text = EMPTY_POLICY_TEXT
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=120,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+    chunks = [chunk.strip() for chunk in splitter.split_text(policy_text) if chunk.strip()]
+    if not chunks:
+        chunks = [EMPTY_POLICY_TEXT]
+
+    vectorstore = FAISS.from_texts(chunks, embedding=embeddings)
     VECTORSTORE_DIR.parent.mkdir(parents=True, exist_ok=True)
     vectorstore.save_local(str(VECTORSTORE_DIR))
     return vectorstore
@@ -127,16 +152,19 @@ def _classify_intent(query: str) -> str:
     if "balance" in lowered_query and ("leave" in lowered_query or "remaining" in lowered_query):
         return "balance_inquiry"
 
-    llm = _get_llm()
-    response = llm.invoke(
-        "Classify HR query intent into exactly one label:\n"
-        "balance_inquiry, leave_request, policy_question, other.\n"
-        f"Query: {query}\n"
-        "Return only one label."
-    )
-    label = (response.content or "").strip().lower()
-    if label in {"balance_inquiry", "leave_request", "policy_question", "other"}:
-        return label
+    try:
+        llm = _get_llm()
+        response = llm.invoke(
+            "Classify HR query intent into exactly one label:\n"
+            "balance_inquiry, leave_request, policy_question, other.\n"
+            f"Query: {query}\n"
+            "Return only one label."
+        )
+        label = (response.content or "").strip().lower()
+        if label in {"balance_inquiry", "leave_request", "policy_question", "other"}:
+            return label
+    except Exception:
+        pass
     return "other"
 
 
@@ -236,8 +264,27 @@ def evaluate_leave_request(
 @tool
 def get_policy_guidance(question: str) -> str:
     """Return top policy clauses with score and citations as JSON."""
-    vectorstore = _build_or_load_vectorstore()
-    scored_docs = vectorstore.similarity_search_with_score(question, k=4)
+    try:
+        vectorstore = _build_or_load_vectorstore()
+        scored_docs = vectorstore.similarity_search_with_score(question, k=4)
+    except Exception:
+        fallback_text = _read_policy_text().strip()
+        excerpt = fallback_text[:1200] if fallback_text else EMPTY_POLICY_TEXT
+        return json.dumps(
+            {
+                "status": "ok",
+                "request_type": "policy_guidance",
+                "question": question,
+                "confidence": "low",
+                "clauses": [
+                    {
+                        "clause_id": "policy_fallback_1",
+                        "text": excerpt,
+                        "score": 1.0,
+                    }
+                ],
+            }
+        )
     items = []
     for index, (doc, score) in enumerate(scored_docs, start=1):
         items.append(
@@ -293,6 +340,113 @@ def _build_executor():
 _EXECUTOR: Optional[Any] = None
 
 
+def _format_balance_response(balance_json: str) -> str:
+    payload = json.loads(balance_json)
+    if payload.get("status") != "ok":
+        return payload.get("message", "Unable to fetch leave balance.")
+    return (
+        f"**Leave Balance Inquiry**\n\n"
+        f"Dear {payload.get('employee_name', 'Employee')},\n\n"
+        f"- **Available Leaves:** {payload.get('available_balance', 0)} day(s)\n"
+        f"- **Leaves Used:** {payload.get('leaves_used', 0)}\n"
+    )
+
+
+def _format_leave_response(leave_json: str) -> str:
+    payload = json.loads(leave_json)
+    if payload.get("status") != "ok":
+        return payload.get("message", "Unable to evaluate leave request.")
+    return (
+        f"**Leave Request Decision**\n\n"
+        f"- **Decision:** {payload.get('decision', 'REVIEW')}\n"
+        f"- **Leave Type:** {payload.get('leave_type', 'casual')}\n"
+        f"- **Requested Days:** {payload.get('requested_days', 0)}\n"
+        f"- **Reason:** {payload.get('reason', 'No reason provided')}\n"
+        f"- **Next Step:** {payload.get('next_step', 'Please contact HR')}\n"
+    )
+
+
+def _format_policy_response(policy_json: str) -> str:
+    payload = json.loads(policy_json)
+    clauses = payload.get("clauses", [])
+    if not clauses:
+        return "No matching policy clauses were found. Please contact HR."
+    preview = "\n".join(f"- {item.get('text', '')}" for item in clauses[:2])
+    confidence = payload.get("confidence", "low")
+    return (
+        f"**Policy Guidance**\n\n"
+        f"Confidence: **{confidence}**\n\n"
+        f"Relevant clauses:\n{preview}"
+    )
+
+
+def _fallback_response(employee_id: str, query: str, intent: str, leave_details: dict[str, Any]) -> str:
+    if intent == "balance_inquiry":
+        return _format_balance_response(get_leave_balance.invoke({"employee_id": employee_id}))
+
+    if intent == "leave_request":
+        return _format_leave_response(
+            evaluate_leave_request.invoke(
+                {
+                    "employee_id": employee_id,
+                    "requested_days": leave_details.get("requested_days") or 1,
+                    "leave_type": leave_details.get("leave_type", "casual"),
+                    "start_date": leave_details.get("start_date") or "",
+                    "end_date": leave_details.get("end_date") or "",
+                }
+            )
+        )
+
+    return _format_policy_response(get_policy_guidance.invoke({"question": query}))
+
+
+def analyze_hr_query(employee_id: str, query: str) -> dict[str, Any]:
+    intent = _classify_intent(query)
+    leave_details = _extract_leave_request_details(query)
+    analysis: dict[str, Any] = {
+        "intent": intent,
+        "leave_type": leave_details.get("leave_type", "casual"),
+        "requested_days": leave_details.get("requested_days"),
+        "start_date": leave_details.get("start_date"),
+        "end_date": leave_details.get("end_date"),
+        "ai_decision": "REVIEW",
+        "ai_reason": "",
+    }
+
+    if intent == "leave_request":
+        requested_days = int(leave_details.get("requested_days") or 1)
+        raw = evaluate_leave_request.invoke(
+            {
+                "employee_id": employee_id,
+                "requested_days": requested_days,
+                "leave_type": leave_details.get("leave_type", "casual"),
+                "start_date": leave_details.get("start_date") or "",
+                "end_date": leave_details.get("end_date") or "",
+            }
+        )
+        payload = json.loads(raw)
+        analysis["requested_days"] = requested_days
+        analysis["ai_decision"] = payload.get("decision", "REVIEW")
+        analysis["ai_reason"] = payload.get("reason", "")
+    elif intent == "balance_inquiry":
+        analysis["ai_decision"] = "INFO"
+        analysis["ai_reason"] = "Balance inquiry."
+    else:
+        analysis["ai_decision"] = "REVIEW"
+        analysis["ai_reason"] = "General HR question."
+
+    return analysis
+
+
+def reset_policy_cache():
+    global _EXECUTOR
+    _EXECUTOR = None
+    if VECTORSTORE_DIR.exists():
+        for item in VECTORSTORE_DIR.glob("*"):
+            item.unlink(missing_ok=True)
+        VECTORSTORE_DIR.rmdir()
+
+
 def answer_hr_query(employee_id: str, query: str) -> str:
     if not employee_id.strip():
         return "Employee ID is required."
@@ -326,5 +480,8 @@ def answer_hr_query(employee_id: str, query: str) -> str:
             ]
         )
     user_message = "\n".join(context_lines)
-    result = _EXECUTOR.invoke({"messages": [{"role": "user", "content": user_message}]})
-    return _extract_output(result)
+    try:
+        result = _EXECUTOR.invoke({"messages": [{"role": "user", "content": user_message}]})
+        return _extract_output(result)
+    except Exception:
+        return _fallback_response(employee_id.strip(), query.strip(), intent, leave_details)

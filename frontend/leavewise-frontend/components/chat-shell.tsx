@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
-import { sendChat } from "@/lib/api";
+import { login, sendChat } from "@/lib/api";
 
 type ChatMessage = {
   id: string;
@@ -20,6 +21,12 @@ function formatNow() {
 }
 
 export function ChatShell() {
+  const [threadId] = useState(() =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `thread-${Date.now()}`,
+  );
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [token, setToken] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -33,10 +40,30 @@ export function ChatShell() {
     },
   ]);
 
-  const canSubmit = useMemo(
-    () => employeeId.trim().length > 0 && query.trim().length > 0 && !isLoading,
-    [employeeId, query, isLoading],
-  );
+  const canSubmit = useMemo(() => {
+    return token.trim().length > 0 && employeeId.trim().length > 0 && query.trim().length > 0 && !isLoading;
+  }, [token, employeeId, query, isLoading]);
+
+  const submitLogin = async () => {
+    setError("");
+    if (!username.trim() || !password.trim()) {
+      setError("Username and password are required.");
+      return;
+    }
+    try {
+      const result = await login({ username: username.trim(), password: password.trim() });
+      if (result.role !== "EMPLOYEE") {
+        setError("Use HR login from the top-right button for HR/Admin users.");
+        return;
+      }
+      setToken(result.access_token);
+      if (result.employeeId) {
+        setEmployeeId(result.employeeId);
+      }
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Login failed.");
+    }
+  };
 
   const onSubmit = (event: { preventDefault: () => void }) => {
     event.preventDefault();
@@ -67,7 +94,8 @@ export function ChatShell() {
       const response = await sendChat({
         employeeId: normalizedEmployeeId,
         query: normalizedQuery,
-      });
+        threadId,
+      }, token);
 
       const assistantMessage: ChatMessage = {
         id: `${Date.now()}-assistant`,
@@ -86,9 +114,17 @@ export function ChatShell() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-8 sm:px-6">
       <header className="mb-6 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-[0_12px_30px_rgba(15,23,42,0.08)] backdrop-blur">
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          <span>HR Assistant Online</span>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span>Employee Self Service</span>
+          </div>
+          <Link
+            href="/hr/login"
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+          >
+            Login as HR
+          </Link>
         </div>
         <h1 className="text-3xl font-semibold tracking-tight text-slate-900">LeaveWise HR Assistant</h1>
         <p className="mt-2 text-sm text-slate-600">
@@ -99,6 +135,34 @@ export function ChatShell() {
       <section className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <aside className="rounded-3xl border border-slate-200/80 bg-white/95 p-5 shadow-[0_8px_24px_rgba(15,23,42,0.08)]">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Session</h2>
+          <label htmlFor="employee-id" className="mt-4 block text-sm font-medium text-slate-700">
+            Username
+          </label>
+          <input
+            id="employee-username"
+            className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-500 transition focus:border-blue-500 focus:ring-2"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+          />
+          <label htmlFor="employee-password" className="mt-4 block text-sm font-medium text-slate-700">
+            Password
+          </label>
+          <input
+            id="employee-password"
+            type="password"
+            className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-500 transition focus:border-blue-500 focus:ring-2"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => void submitLogin()}
+            className="mt-3 w-full rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+          >
+            {token ? "Re-login" : "Login as Employee"}
+          </button>
+          <p className="mt-2 text-xs text-slate-500">Employee login is required to submit leave requests.</p>
+
           <label htmlFor="employee-id" className="mt-4 block text-sm font-medium text-slate-700">
             Employee ID
           </label>
@@ -113,8 +177,8 @@ export function ChatShell() {
             Example IDs must exist in your backend employee data.
           </p>
           <div className="mt-5 grid gap-2 text-xs text-slate-600">
-            <div className="rounded-xl bg-slate-50 px-3 py-2">Try: "how many leaves are left?"</div>
-            <div className="rounded-xl bg-slate-50 px-3 py-2">Try: "I need 2 sick leaves next week"</div>
+            <div className="rounded-xl bg-slate-50 px-3 py-2">Try: &quot;how many leaves are left?&quot;</div>
+            <div className="rounded-xl bg-slate-50 px-3 py-2">Try: &quot;I need 2 sick leaves next week&quot;</div>
           </div>
         </aside>
 
