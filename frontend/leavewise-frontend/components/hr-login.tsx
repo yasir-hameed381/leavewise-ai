@@ -70,7 +70,7 @@ export function HrLogin() {
 
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
 
-        <Link href="/" className="mt-4 inline-block text-sm text-slate-600 hover:text-slate-900">
+        <Link href="/employee/chat" className="mt-4 inline-block text-sm text-slate-600 hover:text-slate-900">
           Back to employee chat
         </Link>
       </div>
