@@ -1,5 +1,5 @@
 import { HrLogin } from "@/components/hr-login";
 
 export default function HrLoginPage() {
-  return <HrLogin />;
+  return <HrLogin initialMode="HR" />;
 }

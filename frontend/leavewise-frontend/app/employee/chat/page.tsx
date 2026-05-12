@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import { sendChat } from "@/lib/api";
 
@@ -20,6 +21,7 @@ function formatNow() {
 }
 
 export default function EmployeeChatPage() {
+  const router = useRouter();
   const [threadId] = useState(() =>
     typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `thread-${Date.now()}`,
   );
@@ -42,6 +44,15 @@ export default function EmployeeChatPage() {
       ? (localStorage.getItem("leavewise_employee_id") ?? "")
       : "";
 
+  useEffect(() => {
+    const storedToken = localStorage.getItem("leavewise_token") ?? "";
+    const storedRole = localStorage.getItem("leavewise_role") ?? "";
+    const storedEmployeeId = localStorage.getItem("leavewise_employee_id") ?? "";
+    if (!storedToken || storedRole !== "EMPLOYEE" || !storedEmployeeId) {
+      router.replace("/");
+    }
+  }, [router]);
+
   const canSubmit = useMemo(() => {
     return token.trim().length > 0 && employeeId.trim().length > 0 && query.trim().length > 0 && !isLoading;
   }, [token, employeeId, query, isLoading]);
@@ -56,7 +67,7 @@ export default function EmployeeChatPage() {
     const normalizedEmployeeId = employeeId.trim();
     const normalizedQuery = query.trim();
     if (!token || !normalizedEmployeeId) {
-      setError("Login and employee ID are required. Open Session & Login first.");
+      setError("Login is required. Please sign in again.");
       return;
     }
     if (!normalizedQuery) {
@@ -99,17 +110,22 @@ export default function EmployeeChatPage() {
   };
 
   return (
-    <section className="flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white">
-      <div className="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white px-5 py-3 text-xs font-medium text-slate-500">
-        Conversation
+    <section className="flex min-h-[680px] flex-col overflow-hidden">
+      <div className="rounded-t-[1.1rem] border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-5 py-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700">Employee Assistant</p>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-slate-900">Conversation</h2>
+          <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">Secure Session</span>
+        </div>
       </div>
-      <div className="flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.06),transparent_45%)] p-5">
+
+      <div className="flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.08),transparent_38%),radial-gradient(circle_at_bottom_right,rgba(14,116,144,0.08),transparent_35%)] p-5">
         {messages.map((message) => (
           <article
             key={message.id}
             className={
               message.role === "user"
-                ? "ml-auto w-fit max-w-[85%] rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 px-4 py-3 text-sm text-white shadow-sm"
+                ? "ml-auto w-fit max-w-[85%] rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 px-4 py-3 text-sm text-white shadow-sm"
                 : "mr-auto w-fit max-w-[85%] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm"
             }
           >
@@ -124,7 +140,7 @@ export default function EmployeeChatPage() {
               <p
                 className={
                   message.role === "user"
-                    ? "mt-2 text-right text-[11px] text-blue-100"
+                    ? "mt-2 text-right text-[11px] text-emerald-100"
                     : "mt-2 text-right text-[11px] text-slate-500"
                 }
               >
@@ -135,13 +151,13 @@ export default function EmployeeChatPage() {
         ))}
       </div>
 
-      <form onSubmit={onSubmit} className="border-t border-slate-200 bg-white p-4">
+      <form onSubmit={onSubmit} className="rounded-b-[1.1rem] border-t border-slate-200 bg-white p-4">
         <label htmlFor="employee-query" className="mb-2 block text-sm font-medium text-slate-700">
           Ask HR assistant
         </label>
         <textarea
           id="employee-query"
-          className="h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-500 transition focus:border-blue-500 focus:ring-2"
+          className="h-24 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-emerald-500 transition focus:border-emerald-500 focus:ring-2"
           placeholder="How many leaves are left?"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -153,7 +169,7 @@ export default function EmployeeChatPage() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isLoading ? "Sending..." : "Send"}
           </button>

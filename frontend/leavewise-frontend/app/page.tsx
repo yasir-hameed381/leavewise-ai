@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { HrLogin } from "@/components/hr-login";
 
 export default function Home() {
-  redirect("/employee/chat");
+  return <HrLogin />;
 }
